@@ -12,11 +12,60 @@ permissions:
   packages: read
 
 jobs:
-  integricode:
+  pick-model:
+    # Saves a runner on comments that are not the review command; the reusable workflow checks again.
     if: github.event_name == 'pull_request' || (github.event.issue.pull_request && contains(github.event.comment.body, '@integricode review'))
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      model: ${{ steps.pick.outputs.model }}
+      provider: ${{ steps.pick.outputs.provider }}
+    steps:
+      - name: Pick the model and provider from the AI Review section
+        id: pick
+        shell: bash
+        env:
+          # On a comment, the issue body is the pull request description at the time of the comment.
+          BODY: ${{ github.event.pull_request.body || github.event.issue.body }}
+          DEFAULT_MODEL: claude-opus-5-5
+        run: |
+          set -euo pipefail
+          # The first non-empty line under "## AI Review", up to the next heading, without list marker or backticks.
+          choice=$(awk '
+            { sub(/\r$/, "") }
+            /^#+[[:space:]]/ {
+              if (in_section) exit
+              if (tolower($0) ~ /^##[[:space:]]+ai review[[:space:]]*$/) in_section = 1
+              next
+            }
+            in_section {
+              sub(/^[[:space:]]*([-*][[:space:]]+)?`?/, "")
+              sub(/`?[[:space:]]*$/, "")
+              if ($0 != "") { print; exit }
+            }
+          ' <<< "$BODY")
+          if [ -z "$choice" ]; then
+            model=$DEFAULT_MODEL
+          elif [[ "$choice" =~ ^(claude|gpt)-[a-z0-9.-]+$ ]]; then
+            model=$choice
+          else
+            echo "::warning::The AI Review section names a model that is neither claude-* nor gpt-*; using $DEFAULT_MODEL."
+            model=$DEFAULT_MODEL
+          fi
+          case "$model" in
+            gpt-*) provider=openai ;;
+            *) provider=anthropic ;;
+          esac
+          echo "Model: $model ($provider)"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+
+  integricode:
+    needs: pick-model
     uses: GabrielBels/integricode/.github/workflows/review.yml@v1
     with:
-      model-provider: anthropic
-      model: claude-opus-5-5
+      model-provider: ${{ needs.pick-model.outputs.provider }}
+      model: ${{ needs.pick-model.outputs.model }}
     secrets:
-      model-api-key: ${{ secrets.INTEGRICODE_ANTHROPIC_API_KEY }}
+      # Each provider gets only its own key; a missing key stays empty instead of falling back to the other one.
+      model-api-key: ${{ (needs.pick-model.outputs.provider == 'openai' && secrets.INTEGRICODE_OPENAI_API_KEY) || (needs.pick-model.outputs.provider == 'anthropic' && secrets.INTEGRICODE_ANTHROPIC_API_KEY) || '' }}
