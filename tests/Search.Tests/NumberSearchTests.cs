@@ -18,4 +18,21 @@ public class NumberSearchTests
     [InlineData("0")]
     public void Parse_RejectsATokenThatIsNotAPositiveWholeNumber(string input) =>
         Assert.Throws<ArgumentException>(() => NumberSearch.Parse(input));
+
+    [Fact]
+    public void Parse_AcceptsASearchUnderTheLimit() =>
+        Assert.Equal(50, NumberSearch.Parse(Numbers(50)).Count);
+
+    [Fact]
+    public void Parse_RejectsASearchOverTheLimit()
+    {
+        var error = Assert.Throws<ArgumentException>(() => NumberSearch.Parse(Numbers(150)));
+        Assert.StartsWith("At most 100 numbers per search.", error.Message);
+    }
+
+    [Fact]
+    public void Parse_CountsARepeatedNumberOnceTowardTheLimit() =>
+        Assert.Equal(60, NumberSearch.Parse(Numbers(60) + " " + Numbers(60)).Count);
+
+    private static string Numbers(int count) => string.Join(' ', Enumerable.Range(1, count));
 }
